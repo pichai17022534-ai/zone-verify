@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ตรวจสอบสมุดบันทึก — Zone Analyst League</title>
+<style>
+  :root { --cyan:#00ACC1; --cyan-d:#00838F; --bg:#E0F7FA; --ok:#2e9e5b; --bad:#d23; --ink:#13343b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI","Sukhumvit Set",sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.6; }
+  .wrap { max-width:780px; margin:0 auto; padding:18px 14px 60px; }
+  h1 { font-size:22px; margin:8px 0 4px; }
+  .sub { color:#456; font-size:14px; margin:0 0 18px; }
+  .card { background:#fff; border-radius:16px; padding:18px; box-shadow:0 2px 10px rgba(0,0,0,.06);
+    margin-bottom:14px; }
+  .big { width:100%; background:var(--cyan); color:#fff; border:0; border-radius:14px;
+    padding:16px; font-size:17px; font-weight:700; cursor:pointer; }
+  .big:disabled { opacity:.5; cursor:default; }
+  .status { font-size:14px; color:var(--cyan-d); margin:12px 2px 4px; min-height:20px; }
+  .row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:10px;
+    font-size:13px; font-family:ui-monospace,"Cascadia Code",monospace; }
+  .row:nth-child(odd) { background:#f3fbfc; }
+  .row .n { width:40px; color:#789; } .row .ty { width:74px; color:#456; }
+  .chk { font-weight:700; } .ok { color:var(--ok); } .bad { color:var(--bad); } .na { color:#bbb; }
+  .hash { color:#9ab; margin-left:auto; }
+  .banner { text-align:center; font-size:17px; font-weight:700; padding:14px; border-radius:14px;
+    margin-top:10px; }
+  .banner.ok { background:#e7f7ee; color:var(--ok); } .banner.bad { background:#fdeaea; color:var(--bad); }
+  details.tech { background:#0f2730; color:#cfe; border-radius:16px; padding:4px 18px; }
+  details.tech summary { cursor:pointer; font-weight:700; padding:14px 0; color:#7fe3e8;
+    font-size:15px; list-style:none; }
+  details.tech summary::-webkit-details-marker { display:none; }
+  details.tech summary::before { content:"🔬 "; }
+  .tech h3 { color:#9fe; font-size:15px; margin:18px 0 6px; border-bottom:1px solid #1d4350;
+    padding-bottom:4px; }
+  .tech p, .tech li { font-size:13.5px; color:#bfe; }
+  .tech code, .tech .mono { font-family:ui-monospace,"Cascadia Code",monospace; font-size:12.5px;
+    background:#13343b; color:#9fe; padding:1px 5px; border-radius:4px; }
+  .tech .block { background:#08191f; border:1px solid #1d4350; border-radius:8px; padding:10px 12px;
+    font-family:ui-monospace,monospace; font-size:12px; color:#9fe; overflow-x:auto; white-space:pre; }
+  .tech b { color:#fff; }
+  .foot { font-size:12px; color:#789; text-align:center; margin-top:20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔗 ตรวจสอบสมุดบันทึก (Trust Ledger)</h1>
+  <p class="sub">เครื่องมือ <b>อิสระ</b> ของ Zone Analyst League — ตรวจว่าผลที่ประกาศ
+    <b>ไม่ถูกแก้ย้อนหลัง</b> โดยคำนวณซ้ำในเบราว์เซอร์ของคุณเอง ดึงเฉพาะข้อมูลสาธารณะ
+    <b>ไม่ต้องเชื่อใจเซิร์ฟเวอร์ใคร</b></p>
+
+  <div class="card">
+    <button class="big" id="go">🛡️ ตรวจสอบความถูกต้อง</button>
+    <div class="status" id="status">กดปุ่มเพื่อเริ่มตรวจสอบทั้งเชน</div>
+    <div id="results"></div>
+    <div id="banner"></div>
+  </div>
+
+  <details class="tech">
+    <summary>รายละเอียดเชิงเทคนิคแบบเต็ม (สำหรับนักพัฒนา / auditor)</summary>
+
+    <h3>1. สถาปัตยกรรม (Architecture)</h3>
+    <p>Trust Ledger เป็น <b>append-only hash chain</b> — "ผลรางวัลที่ประกาศ 1 เกม = 1 block"
+      (n2/n3 แยก block เชนเดียวทั้งระบบ) · Genesis block <code>#0</code> มี
+      <code>previousBlockHash = "0"×64</code></p>
+
+    <h3>2. Canonical Serialization</h3>
+    <p>ก่อน hash/sign ทุก block ถูก serialize เป็น <b>deterministic canonical JSON</b>:
+      sort object keys แบบ recursive (lexicographic) · ไม่มี whitespace · timestamp เป็น ISO-8601 UTC ·
+      field set คงที่ 14 ตัว (เติม <code>null</code> ที่ไม่ใช้ เพื่อกัน ambiguity):</p>
+    <div class="block">blockNumber, blockType, seasonId, drawId, gameType, winningNumber,
+winningZone, totalPredictions, predictionMerkleRoot, leaderboardRoot,
+previousBlockHash, correctsBlockNumber, correctionReason, createdAt</div>
+
+    <h3>3. Block Hash &amp; Digital Signature</h3>
+    <p><code>blockHash = SHA-256( canonical(block \ {blockHash, serverSignature}) )</code> → hex 64 ตัว</p>
+    <p><code>serverSignature = Ed25519.sign( canonical เดียวกัน )</code> → base64 ·
+      public key (SPKI) เผยแพร่ที่ <code>GET /ledgerPublic?key=1</code> ·
+      <b>private key อยู่ใน Secret Manager ฝั่งเซิร์ฟเวอร์ ไม่เคยออกนอกระบบ</b></p>
+
+    <h3>4. Merkle Commitments</h3>
+    <p><code>predictionMerkleRoot</code> = binary Merkle root ของคำทายทั้งงวด
+      (leaf = <code>SHA-256(canonical{drawId, gameType, selectedZone, submittedAtMs, uid})</code> ·
+      เรียงตาม uid · จำนวนคี่ = ทำซ้ำใบสุดท้าย) → <b>commit</b> ว่าคำทายชุดใดถูกนับ
+      โดยไม่ต้องเปิดเผยทั้งหมด · <code>leaderboardRoot</code> = Merkle root ของผลอันดับ</p>
+
+    <h3>5. Hash Chain → Tamper-Evidence</h3>
+    <p><code>block[N].previousBlockHash == block[N-1].blockHash</code> ·
+      แก้ block ใดย้อนหลังแม้แต่บิตเดียว → hash ของ block นั้นและทุก block หลังจากนั้นเพี้ยน +
+      ลายเซ็นพัง → <b>จับได้ทันที</b></p>
+    <p>เป็น <b>tamper-evident ไม่ใช่ tamper-proof</b>: แก้ได้แต่ "ซ่อนไม่ได้" —
+      แม้แต่ผู้ดูแลระบบเองก็แก้ประวัติเงียบๆ ไม่ได้ (ต้องมี private key + ยังพังเชนตั้งแต่จุดที่แก้)</p>
+
+    <h3>6. ขั้นตอนตรวจสอบ (หน้านี้ทำอะไร)</h3>
+    <p>1) ดึง public key + ทุก block ผ่าน endpoint สาธารณะ · 2) คำนวณ <code>SHA-256</code> ซ้ำ เทียบ
+      <code>blockHash</code> · 3) <code>Ed25519.verify</code> ลายเซ็นด้วย public key ·
+      4) ตรวจ <code>previousBlockHash</code> linkage ตลอดเชน · ทั้งหมดรันใน browser ผ่าน
+      <code>Web Crypto API</code> · <b>zero dependency</b></p>
+
+    <h3>7. Reference</h3>
+    <p>อัลกอริทึมตรงกับ <code>functions_league/ledger.js</code> (server) เป๊ะ · มี Node CLI verifier
+      (<code>verify-ledger.js</code>) คู่กัน · ทั้งหมด open ให้ตรวจ/รันเองได้</p>
+  </details>
+
+  <p class="foot">Zone Analyst League · Trust Ledger Independent Verifier ·
+    ไร้เงินเดิมพัน — ความน่าเชื่อถือคือคุณค่า</p>
+</div>
+
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const BASE = params.get("base") ||
+  "https://us-central1-zonelottery23.cloudfunctions.net";
+const ONLY = params.has("block") ? Number(params.get("block")) : null; // deep-link ตรวจบล็อกเดียว
+
+// ---- canonical/hash ตรงกับ functions_league/ledger.js เป๊ะ ----
+function canonicalize(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(canonicalize).join(",") + "]";
+  return "{" + Object.keys(v).sort()
+    .map(k => JSON.stringify(k) + ":" + canonicalize(v[k])).join(",") + "}";
+}
+const CANON_FIELDS = ["blockNumber","blockType","seasonId","drawId","gameType",
+  "winningNumber","winningZone","totalPredictions","predictionMerkleRoot",
+  "leaderboardRoot","previousBlockHash","correctsBlockNumber","correctionReason","createdAt"];
+function canonicalBase(b) {
+  const o = {}; for (const k of CANON_FIELDS) o[k] = b[k] === undefined ? null : b[k]; return o;
+}
+async function sha256hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+function b64ToBytes(b64) {
+  const bin = atob(b64); const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u;
+}
+function pemToDer(pem) {
+  return b64ToBytes(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""));
+}
+async function getJson(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error("HTTP " + r.status); return r.json();
+}
+
+let pubKey = null, keyLoaded = false;
+async function loadKey() {
+  if (keyLoaded) return; keyLoaded = true;
+  const res = await getJson(BASE + "/ledgerPublic?key=1");
+  if (res.publicKey) {
+    try {
+      pubKey = await crypto.subtle.importKey(
+        "spki", pemToDer(res.publicKey), {name: "Ed25519"}, false, ["verify"]);
+    } catch (e) { pubKey = null; }
+  }
+}
+async function verifyOne(block) {
+  const canonical = canonicalize(canonicalBase(block));
+  const hashOk = (await sha256hex(canonical)) === block.blockHash;
+  let sigOk = null;
+  if (pubKey && block.serverSignature) {
+    try {
+      sigOk = await crypto.subtle.verify({name: "Ed25519"}, pubKey,
+        b64ToBytes(block.serverSignature), new TextEncoder().encode(canonical));
+    } catch (e) { sigOk = null; }
+  }
+  return {hashOk, sigOk};
+}
+
+const $ = id => document.getElementById(id);
+const mark = ok => ok === null ? '<span class="chk na">—</span>'
+  : (ok ? '<span class="chk ok">✅</span>' : '<span class="chk bad">❌</span>');
+
+async function run() {
+  $("go").disabled = true; $("results").innerHTML = ""; $("banner").innerHTML = "";
+  try {
+    $("status").textContent = "กำลังโหลดกุญแจสาธารณะ...";
+    await loadKey();
+    const head = await getJson(BASE + "/ledgerPublic?head=1");
+    const from = ONLY !== null ? ONLY : 0;
+    const to = ONLY !== null ? ONLY : head.latestBlockNumber;
+    $("status").innerHTML = (pubKey ? "🔑 กุญแจ Ed25519 พร้อม" :
+      "⚠️ เบราว์เซอร์นี้ตรวจลายเซ็นไม่ได้ (ตรวจ hash + เชน ได้)") +
+      " · หัวเชนล่าสุด #" + head.latestBlockNumber;
+    let prev = null, pass = 0, fail = 0;
+    for (let n = from; n <= to; n++) {
+      const block = await getJson(BASE + "/ledgerPublic?block=" + n);
+      const {hashOk, sigOk} = await verifyOne(block);
+      let chainOk = true;
+      if (ONLY === null && n > 0) chainOk = block.previousBlockHash === prev;
+      (hashOk && sigOk !== false && chainOk) ? pass++ : fail++;
+      const chainMark = (ONLY !== null || n === 0) ? mark(null) : mark(chainOk);
+      $("results").insertAdjacentHTML("beforeend",
+        '<div class="row"><span class="n">#' + n + '</span>' +
+        '<span class="ty">' + (block.blockType || "") + '</span>' +
+        'hash ' + mark(hashOk) + ' ลายเซ็น ' + mark(sigOk) + ' เชน ' + chainMark +
+        '<span class="hash">' + String(block.blockHash).slice(0, 12) + '…</span></div>');
+      prev = block.blockHash;
+    }
+    $("banner").innerHTML = fail === 0
+      ? '<div class="banner ok">✅ ผ่านทั้งหมด — ไม่ถูกแก้ (' + pass + ' บล็อก)</div>'
+      : '<div class="banner bad">❌ พบปัญหา ' + fail + ' บล็อก!</div>';
+    $("status").textContent = "ตรวจเสร็จ " + (pass + fail) + " บล็อก";
+  } catch (e) {
+    $("banner").innerHTML = '<div class="banner bad">เชื่อมต่อไม่ได้: ' + e.message + '</div>';
+    $("status").textContent = "";
+  } finally { $("go").disabled = false; }
+}
+
+$("go").onclick = run;
+if (ONLY !== null) { $("go").textContent = "🛡️ ตรวจสอบบล็อก #" + ONLY; run(); }
+</script>
+</body>
+</html>
