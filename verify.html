@@ -27,6 +27,7 @@
   .banner { text-align:center; font-size:17px; font-weight:700; padding:14px; border-radius:14px;
     margin-top:10px; }
   .banner.ok { background:#e7f7ee; color:var(--ok); } .banner.bad { background:#fdeaea; color:var(--bad); }
+  .banner.warn { background:#fff6e0; color:#9a6a00; }
   details.tech { background:#0f2730; color:#cfe; border-radius:16px; padding:4px 18px; }
   details.tech summary { cursor:pointer; font-weight:700; padding:14px 0; color:#7fe3e8;
     font-size:15px; list-style:none; }
@@ -113,6 +114,7 @@ const params = new URLSearchParams(location.search);
 const BASE = params.get("base") ||
   "https://us-central1-zonelottery23.cloudfunctions.net";
 const ONLY = params.has("block") ? Number(params.get("block")) : null; // deep-link ตรวจบล็อกเดียว
+const ALLOW_UNSIGNED = params.get("allowUnsigned") === "1"; // ตรวจแค่ hash (dev/debug)
 
 // ---- canonical/hash ตรงกับ functions_league/ledger.js เป๊ะ ----
 function canonicalize(v) {
@@ -142,26 +144,65 @@ async function getJson(url) {
   const r = await fetch(url); if (!r.ok) throw new Error("HTTP " + r.status); return r.json();
 }
 
-let pubKey = null, keyLoaded = false;
-async function loadKey() {
+// [งาน A] trust-root = keys.json (git-pinned ใน repo นี้) — ไม่เชื่อ key จาก endpoint
+// keyStatus: "ok" · "missing"=โหลด keys.json ไม่ได้ · "unsupported"=browser ไม่รองรับ Ed25519
+let trustKeys = null, keyLoaded = false, keyStatus = "ok", canVerifySig = false;
+const importedKeys = {}; // keyId → CryptoKey (cache) หรือ null ถ้า import ไม่ได้
+async function importKeyFor(k) {
+  if (k.keyId in importedKeys) return importedKeys[k.keyId];
+  try {
+    importedKeys[k.keyId] = await crypto.subtle.importKey(
+      "spki", pemToDer(k.publicKeyPem), {name: "Ed25519"}, false, ["verify"]);
+  } catch (e) { importedKeys[k.keyId] = null; }
+  return importedKeys[k.keyId];
+}
+async function loadKeys() {
   if (keyLoaded) return; keyLoaded = true;
-  const res = await getJson(BASE + "/ledgerPublic?key=1");
-  if (res.publicKey) {
-    try {
-      pubKey = await crypto.subtle.importKey(
-        "spki", pemToDer(res.publicKey), {name: "Ed25519"}, false, ["verify"]);
-    } catch (e) { pubKey = null; }
+  let keys;
+  try {
+    const res = await fetch("keys.json"); // relative = git-pinned trust root
+    if (!res.ok) { keyStatus = "missing"; return; }
+    keys = await res.json();
+  } catch (e) { keyStatus = "missing"; return; }
+  if (!Array.isArray(keys) || keys.length === 0) { keyStatus = "missing"; return; }
+  trustKeys = keys;
+  // เช็ก capability: browser รองรับ Ed25519 ไหม (ลอง import key แรก)
+  canVerifySig = (await importKeyFor(keys[0])) != null;
+  if (!canVerifySig) keyStatus = "unsupported";
+}
+function keyForBlock(keys, blockNumber) {
+  for (const k of keys) {
+    const from = k.validFromBlock == null ? 0 : k.validFromBlock;
+    const to = k.validToBlock == null ? Infinity : k.validToBlock;
+    if (blockNumber >= from && blockNumber <= to) {
+      if (k.status === "revoked") return {revoked: true};
+      return k;
+    }
   }
+  return null;
 }
 async function verifyOne(block) {
   const canonical = canonicalize(canonicalBase(block));
   const hashOk = (await sha256hex(canonical)) === block.blockHash;
-  let sigOk = null;
-  if (pubKey && block.serverSignature) {
-    try {
-      sigOk = await crypto.subtle.verify({name: "Ed25519"}, pubKey,
-        b64ToBytes(block.serverSignature), new TextEncoder().encode(canonical));
-    } catch (e) { sigOk = null; }
+  let sigOk = null; // null = ไม่ได้ตรวจลายเซ็น (allow-unsigned / browser ไม่รองรับ)
+  if (!ALLOW_UNSIGNED && trustKeys && canVerifySig) {
+    const entry = keyForBlock(trustKeys, block.blockNumber);
+    if (!entry || entry.revoked) {
+      sigOk = false; // ไม่มี key ครอบช่วง / revoked = fail-closed
+    } else if (!block.serverSignature) {
+      sigOk = false; // มี key แต่บล็อกไม่เซ็น = alg=none downgrade
+    } else {
+      const ck = await importKeyFor(entry);
+      if (!ck) {
+        sigOk = false;
+      } else {
+        try {
+          sigOk = await crypto.subtle.verify({name: "Ed25519"}, ck,
+            b64ToBytes(block.serverSignature),
+            new TextEncoder().encode(canonical));
+        } catch (e) { sigOk = false; } // verify error = ไม่ผ่าน (ไม่ข้ามเงียบ)
+      }
+    }
   }
   return {hashOk, sigOk};
 }
@@ -173,14 +214,25 @@ const mark = ok => ok === null ? '<span class="chk na">—</span>'
 async function run() {
   $("go").disabled = true; $("results").innerHTML = ""; $("banner").innerHTML = "";
   try {
-    $("status").textContent = "กำลังโหลดกุญแจสาธารณะ...";
-    await loadKey();
+    $("status").textContent = "กำลังโหลด keys.json (trust-root)...";
+    await loadKeys();
+    // [งาน A/B] โหลด keys.json (trust-root) ไม่ได้ → ปฏิเสธ (ยกเว้น ?allowUnsigned=1)
+    if (keyStatus === "missing" && !ALLOW_UNSIGNED) {
+      $("banner").innerHTML = '<div class="banner bad">❌ โหลด keys.json' +
+        ' (trust-root) ไม่ได้ — ตรวจลายเซ็นไม่ได้ (fail-closed)' +
+        '<br>ถ้าตั้งใจตรวจแค่ hash chain เพิ่ม <code>?allowUnsigned=1</code>' +
+        ' ใน URL</div>';
+      $("status").textContent = "";
+      return;
+    }
     const head = await getJson(BASE + "/ledgerPublic?head=1");
     const from = ONLY !== null ? ONLY : 0;
     const to = ONLY !== null ? ONLY : head.latestBlockNumber;
-    $("status").innerHTML = (pubKey ? "🔑 กุญแจ Ed25519 พร้อม" :
-      "⚠️ เบราว์เซอร์นี้ตรวจลายเซ็นไม่ได้ (ตรวจ hash + เชน ได้)") +
-      " · หัวเชนล่าสุด #" + head.latestBlockNumber;
+    const keyMsg = canVerifySig ? "🔑 trust-root: keys.json พร้อม" :
+      (keyStatus === "unsupported" ?
+        "⚠️ เบราว์เซอร์นี้ไม่รองรับ Ed25519 — ตรวจได้แค่ hash + เชน" :
+        "⚠️ โหมด allow-unsigned — ตรวจแค่ hash + เชน");
+    $("status").innerHTML = keyMsg + " · หัวเชนล่าสุด #" + head.latestBlockNumber;
     let prev = null, pass = 0, fail = 0;
     for (let n = from; n <= to; n++) {
       const block = await getJson(BASE + "/ledgerPublic?block=" + n);
@@ -196,9 +248,19 @@ async function run() {
         '<span class="hash">' + String(block.blockHash).slice(0, 12) + '…</span></div>');
       prev = block.blockHash;
     }
-    $("banner").innerHTML = fail === 0
-      ? '<div class="banner ok">✅ ผ่านทั้งหมด — ไม่ถูกแก้ (' + pass + ' บล็อก)</div>'
-      : '<div class="banner bad">❌ พบปัญหา ' + fail + ' บล็อก!</div>';
+    if (fail > 0) {
+      $("banner").innerHTML =
+        '<div class="banner bad">❌ พบปัญหา ' + fail + ' บล็อก!</div>';
+    } else if (canVerifySig) {
+      $("banner").innerHTML = '<div class="banner ok">✅ ผ่านทั้งหมด — ไม่ถูกแก้' +
+        ' (รวมลายเซ็น · ' + pass + ' บล็อก)</div>';
+    } else {
+      $("banner").innerHTML = '<div class="banner warn">⚠️ ผ่าน hash + เชน (' +
+        pass + ' บล็อก) แต่<b>ยังไม่ตรวจลายเซ็น</b> — ' +
+        (keyStatus === "unsupported" ?
+          'ใช้ Node CLI verify-ledger.js เพื่อตรวจเต็ม' : 'โหมด allow-unsigned') +
+        '</div>';
+    }
     $("status").textContent = "ตรวจเสร็จ " + (pass + fail) + " บล็อก";
   } catch (e) {
     $("banner").innerHTML = '<div class="banner bad">เชื่อมต่อไม่ได้: ' + e.message + '</div>';

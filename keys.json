@@ -1,0 +1,11 @@
+[
+  {
+    "keyId": "league-ed25519-1",
+    "algorithm": "ed25519",
+    "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAlLKnb1/+UVB5MX/xLE30GZGX663TSjMobqka4dWt+IY=\n-----END PUBLIC KEY-----\n",
+    "validFromBlock": 0,
+    "validToBlock": null,
+    "status": "active",
+    "fingerprintSha256": "035a4dfef8b960cf2c57f8e225c944dda1d5a8dbe7ddf225231a98e7fd395cdf"
+  }
+]
