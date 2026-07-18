@@ -77,14 +77,23 @@ previousBlockHash, correctsBlockNumber, correctionReason, createdAt</div>
     <h3>3. Block Hash &amp; Digital Signature</h3>
     <p><code>blockHash = SHA-256( canonical(block \ {blockHash, serverSignature}) )</code> → hex 64 ตัว</p>
     <p><code>serverSignature = Ed25519.sign( canonical เดียวกัน )</code> → base64 ·
-      public key (SPKI) เผยแพร่ที่ <code>GET /ledgerPublic?key=1</code> ·
       <b>private key อยู่ใน Secret Manager ฝั่งเซิร์ฟเวอร์ ไม่เคยออกนอกระบบ</b></p>
+    <p><b>Trust-root:</b> หน้านี้ <b>ไม่ได้</b> ใช้ public key จาก endpoint เป็นหลัก (endpoint คือ
+      เซิร์ฟเวอร์ที่เรากำลังตรวจ — ถ้าถูกยึด ก็ประกาศ key ปลอมได้) แต่โหลดจาก
+      <code>keys.json</code> ที่ <b>pin ไว้ในรีโปสาธารณะนี้</b> (ย้อนดูประวัติการแก้ไขได้บน GitHub) ·
+      รองรับหลาย key ตามช่วงบล็อก (<code>validFromBlock</code>/<code>validToBlock</code>) และสถานะ
+      <code>revoked</code> · ถ้าโหลด <code>keys.json</code> ไม่ได้ = <b>ปฏิเสธการตรวจ (fail-closed)</b>
+      ไม่ปล่อยผ่านเงียบ ๆ · (<code>GET /ledgerPublic?key=1</code> ยังมีไว้ให้เทียบ แต่ไม่ใช่สิ่งที่หน้านี้เชื่อ)</p>
 
     <h3>4. Merkle Commitments</h3>
     <p><code>predictionMerkleRoot</code> = binary Merkle root ของคำทายทั้งงวด
       (leaf = <code>SHA-256(canonical{drawId, gameType, selectedZone, submittedAtMs, uid})</code> ·
       เรียงตาม uid · จำนวนคี่ = ทำซ้ำใบสุดท้าย) → <b>commit</b> ว่าคำทายชุดใดถูกนับ
-      โดยไม่ต้องเปิดเผยทั้งหมด · <code>leaderboardRoot</code> = Merkle root ของผลอันดับ</p>
+      โดยไม่ต้องเปิดเผยทั้งหมด</p>
+    <p><code>leaderboardRoot</code> = Merkle root ของ <b>ตารางอันดับระดับประเทศ</b> ของเกมนั้น
+      ณ ตอนปิดงวด (leaf = <code>SHA-256(canonical{accuracyRate, bestStreak, currentStreak,
+      displayName, rank, totalWins})</code> · เรียงตาม <code>rank</code> · จำนวนคี่ = ทำซ้ำใบสุดท้าย)
+      → <b>commit อันดับลงเชน</b> = แก้ตารางอันดับในฐานข้อมูลแล้วเนียนไม่ได้</p>
 
     <h3>5. Hash Chain → Tamper-Evidence</h3>
     <p><code>block[N].previousBlockHash == block[N-1].blockHash</code> ·
@@ -94,12 +103,37 @@ previousBlockHash, correctsBlockNumber, correctionReason, createdAt</div>
       แม้แต่ผู้ดูแลระบบเองก็แก้ประวัติเงียบๆ ไม่ได้ (ต้องมี private key + ยังพังเชนตั้งแต่จุดที่แก้)</p>
 
     <h3>6. ขั้นตอนตรวจสอบ (หน้านี้ทำอะไร)</h3>
-    <p>1) ดึง public key + ทุก block ผ่าน endpoint สาธารณะ · 2) คำนวณ <code>SHA-256</code> ซ้ำ เทียบ
-      <code>blockHash</code> · 3) <code>Ed25519.verify</code> ลายเซ็นด้วย public key ·
-      4) ตรวจ <code>previousBlockHash</code> linkage ตลอดเชน · ทั้งหมดรันใน browser ผ่าน
-      <code>Web Crypto API</code> · <b>zero dependency</b></p>
+    <p>1) โหลด <code>keys.json</code> (trust-root ที่ pin ในรีโปนี้ — ไม่ใช่จาก endpoint) ·
+      2) ดึงทุก block ผ่าน endpoint สาธารณะ <code>ledgerPublic</code> ·
+      3) คำนวณ <code>SHA-256</code> ซ้ำ เทียบ <code>blockHash</code> ·
+      4) <code>Ed25519.verify</code> ลายเซ็นด้วย key จาก trust-root (บล็อกไม่เซ็น / verify ไม่ผ่าน =
+      ถือว่าไม่ผ่าน ไม่ downgrade เงียบ) · 5) ตรวจ <code>previousBlockHash</code> linkage ตลอดเชน ·
+      <b>6) ตรวจตารางอันดับ:</b> ดึงตารางอันดับระดับประเทศ <b>ปัจจุบัน</b> ทั้งสองเกม
+      (<code>ledgerPublic?board=n2|n3</code>) มาคำนวณ Merkle ซ้ำ แล้วเทียบกับ
+      <code>leaderboardRoot</code> ที่เซ็นไว้ใน block ผลงวด<b>ล่าสุดของเกมนั้น</b> — ไม่ตรง =
+      ตารางถูกแก้ · ทั้งหมดรันในเบราว์เซอร์ของคุณผ่าน <code>Web Crypto API</code> ·
+      <b>zero dependency</b></p>
+    <p><b>พารามิเตอร์ที่ใช้ได้:</b> <code>?block=N</code> ตรวจเฉพาะบล็อกเดียว ·
+      <code>?full=1</code> เปิดแล้วตรวจทั้งเชนอัตโนมัติ (ปุ่ม "ตรวจสอบเต็ม" ในแอปใช้แบบนี้) ·
+      <code>?allowUnsigned=1</code> โหมดดีบั๊ก ตรวจแค่ hash + เชน (ไม่ตรวจลายเซ็น)</p>
 
-    <h3>7. Reference</h3>
+    <h3>7. ขอบเขตการตรวจ — ตรวจอะไรแล้ว / ยังไม่ตรวจอะไร</h3>
+    <p>เราระบุตรงไปตรงมาว่าหน้านี้พิสูจน์อะไรได้จริงบ้าง เพื่อให้ผู้ตรวจสอบประเมินได้ถูกต้อง
+      (ระบบนี้เป็น <b>tamper-evident</b> — เป้าหมายคือ "แก้แล้วซ่อนไม่ได้" ไม่ใช่ "แก้ไม่ได้")</p>
+    <p><b>✅ ตรวจแล้ว:</b> <code>blockHash</code> ของทุกบล็อก · ลายเซ็น <code>Ed25519</code> ทุกบล็อก
+      (ด้วย trust-root ที่ pin ไว้) · ความต่อเนื่องของเชนตลอดสาย ·
+      <code>leaderboardRoot</code> ของบล็อกผลงวดล่าสุดแต่ละเกม เทียบกับตารางอันดับระดับประเทศปัจจุบัน</p>
+    <p><b>⬜ ยังไม่ตรวจ</b> (อยู่ระหว่างพัฒนา / เป็นข้อจำกัดเชิงออกแบบ):</p>
+    <p>· <code>predictionMerkleRoot</code> — คำทายถูก commit ลงเชนแล้วทุกงวด แต่ยังไม่มี endpoint
+      สาธารณะให้ดึงคำทายมาคำนวณ Merkle ซ้ำ (ต้องออกแบบให้พิสูจน์ได้โดยไม่เปิดเผยข้อมูลผู้เล่น)
+      — <b>อยู่ระหว่างพัฒนา</b></p>
+    <p>· <b>ตารางอันดับย้อนหลังรายบล็อก</b> — ระบบเก็บตารางอันดับ "ใบปัจจุบัน" ใบเดียว (เขียนทับทุกงวด)
+      จึงคำนวณซ้ำเทียบได้เฉพาะกับบล็อกล่าสุด · ส่วน <code>leaderboardRoot</code> ของบล็อกเก่ายังถูก
+      คุ้มครองด้วย hash chain + ลายเซ็นอยู่ (แก้แล้วเชนพัง จับได้) เพียงแต่ยัง "คำนวณซ้ำ" เทียบไม่ได้</p>
+    <p>· <b>อันดับระดับจังหวัด / ภาค</b> — เชน commit เฉพาะตารางระดับประเทศ ตารางย่อยจึงยังไม่อยู่
+      ในขอบเขตการพิสูจน์นี้</p>
+
+    <h3>8. Reference</h3>
     <p>อัลกอริทึมตรงกับ <code>functions_league/ledger.js</code> (server) เป๊ะ · มี Node CLI verifier
       (<code>verify-ledger.js</code>) คู่กัน · ทั้งหมด open ให้ตรวจ/รันเองได้</p>
   </details>
