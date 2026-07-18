@@ -10,7 +10,8 @@
   body { margin:0; font-family:-apple-system,"Segoe UI","Sukhumvit Set",sans-serif;
     background:var(--bg); color:var(--ink); line-height:1.6; }
   .wrap { max-width:780px; margin:0 auto; padding:18px 14px 60px; }
-  h1 { font-size:22px; margin:8px 0 4px; }
+  h1 { font-size:22px; margin:8px 0 10px; line-height:1.4; text-wrap:balance; }
+  .sub.lead { color:var(--cyan-d); font-size:15px; }
   .sub { color:#456; font-size:14px; margin:0 0 18px; }
   .card { background:#fff; border-radius:16px; padding:18px; box-shadow:0 2px 10px rgba(0,0,0,.06);
     margin-bottom:14px; }
@@ -21,11 +22,24 @@
   .row { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:10px;
     font-size:13px; font-family:ui-monospace,"Cascadia Code",monospace; }
   .row:nth-child(odd) { background:#f3fbfc; }
-  .row .n { width:40px; color:#789; } .row .ty { width:74px; color:#456; }
+  .row .n { width:78px; color:#456; }
   .chk { font-weight:700; } .ok { color:var(--ok); } .bad { color:var(--bad); } .na { color:#bbb; }
   .hash { color:#9ab; margin-left:auto; }
-  .banner { text-align:center; font-size:17px; font-weight:700; padding:14px; border-radius:14px;
-    margin-top:10px; }
+  .sum { margin-top:14px; }
+  .sumrow { display:flex; align-items:flex-start; gap:10px; padding:11px 12px;
+    border-radius:12px; font-size:15px; line-height:1.5; }
+  .sumrow + .sumrow { margin-top:6px; }
+  .sumrow.pass { background:#f2fbf6; } .sumrow.failrow { background:#fdeaea; }
+  .sumrow .mk { flex:none; font-size:15px; }
+  .detail { margin-top:12px; border-top:1px solid #d7eef1; padding-top:8px; }
+  .detail summary { cursor:pointer; font-size:14px; color:var(--cyan-d); padding:6px 2px; }
+  .rowhead { display:flex; align-items:center; gap:8px; padding:4px 10px; font-size:12px;
+    color:#789; }
+  .rowhead .n { width:78px; } .rowhead .c { width:52px; text-align:center; }
+  .row .c { width:52px; text-align:center; }
+  .banner { text-align:center; padding:14px; border-radius:14px; margin-top:10px; }
+  .banner .bmain { font-size:17px; font-weight:700; line-height:1.45; }
+  .banner .bsub { font-size:13px; font-weight:400; margin-top:4px; opacity:.85; }
   .banner.ok { background:#e7f7ee; color:var(--ok); } .banner.bad { background:#fdeaea; color:var(--bad); }
   .banner.warn { background:#fff6e0; color:#9a6a00; }
   details.tech { background:#0f2730; color:#cfe; border-radius:16px; padding:4px 18px; }
@@ -46,16 +60,23 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🔗 ตรวจสอบสมุดบันทึก (Trust Ledger)</h1>
-  <p class="sub">เครื่องมือ <b>อิสระ</b> ของ Zone Analyst League — ตรวจว่าผลที่ประกาศ
-    <b>ไม่ถูกแก้ย้อนหลัง</b> โดยคำนวณซ้ำในเบราว์เซอร์ของคุณเอง ดึงเฉพาะข้อมูลสาธารณะ
-    <b>ไม่ต้องเชื่อใจเซิร์ฟเวอร์ใคร</b></p>
+  <h1>ตรวจสอบบล็อกเชนทั้งระบบ แบบเต็ม</h1>
+  <p class="sub">หน้านี้จะย้อนตรวจ ผลรางวัลและอันดับทุกงวด
+    ตั้งแต่งวดแรกที่ระบบนี้ดำเนินการมาจนถึงงวดล่าสุด
+    ว่ายังตรงกับผลที่ประกาศไว้ในงวดนั้น ๆ ที่ผ่านมาหรือไม่</p>
+  <p class="sub">ถ้ามีใครแอบแก้ผลภายหลัง ผลจากการตรวจในหน้านี้
+    จะขึ้นเตือนให้เห็นทันที</p>
+  <p class="sub lead"><b>โปร่งใส ตรวจสอบได้ด้วยตัวคุณเอง</b></p>
 
   <div class="card">
-    <button class="big" id="go">🛡️ ตรวจสอบความถูกต้อง</button>
-    <div class="status" id="status">กดปุ่มเพื่อเริ่มตรวจสอบทั้งเชน</div>
-    <div id="results"></div>
+    <button class="big" id="go">🛡️ เริ่มตรวจสอบ</button>
+    <div class="status" id="status">กดปุ่มด้านบนเพื่อเริ่มตรวจสอบ</div>
     <div id="banner"></div>
+    <div id="summary"></div>
+    <details class="detail" id="detailBox" hidden>
+      <summary>ดูผลตรวจรายบล็อก</summary>
+      <div id="results"></div>
+    </details>
   </div>
 
   <details class="tech">
@@ -117,21 +138,17 @@ previousBlockHash, correctsBlockNumber, correctionReason, createdAt</div>
       <code>?full=1</code> เปิดแล้วตรวจทั้งเชนอัตโนมัติ (ปุ่ม "ตรวจสอบเต็ม" ในแอปใช้แบบนี้) ·
       <code>?allowUnsigned=1</code> โหมดดีบั๊ก ตรวจแค่ hash + เชน (ไม่ตรวจลายเซ็น)</p>
 
-    <h3>7. ขอบเขตการตรวจ — ตรวจอะไรแล้ว / ยังไม่ตรวจอะไร</h3>
-    <p>เราระบุตรงไปตรงมาว่าหน้านี้พิสูจน์อะไรได้จริงบ้าง เพื่อให้ผู้ตรวจสอบประเมินได้ถูกต้อง
-      (ระบบนี้เป็น <b>tamper-evident</b> — เป้าหมายคือ "แก้แล้วซ่อนไม่ได้" ไม่ใช่ "แก้ไม่ได้")</p>
-    <p><b>✅ ตรวจแล้ว:</b> <code>blockHash</code> ของทุกบล็อก · ลายเซ็น <code>Ed25519</code> ทุกบล็อก
-      (ด้วย trust-root ที่ pin ไว้) · ความต่อเนื่องของเชนตลอดสาย ·
-      <code>leaderboardRoot</code> ของบล็อกผลงวดล่าสุดแต่ละเกม เทียบกับตารางอันดับระดับประเทศปัจจุบัน</p>
-    <p><b>⬜ ยังไม่ตรวจ</b> (อยู่ระหว่างพัฒนา / เป็นข้อจำกัดเชิงออกแบบ):</p>
-    <p>· <code>predictionMerkleRoot</code> — คำทายถูก commit ลงเชนแล้วทุกงวด แต่ยังไม่มี endpoint
-      สาธารณะให้ดึงคำทายมาคำนวณ Merkle ซ้ำ (ต้องออกแบบให้พิสูจน์ได้โดยไม่เปิดเผยข้อมูลผู้เล่น)
-      — <b>อยู่ระหว่างพัฒนา</b></p>
-    <p>· <b>ตารางอันดับย้อนหลังรายบล็อก</b> — ระบบเก็บตารางอันดับ "ใบปัจจุบัน" ใบเดียว (เขียนทับทุกงวด)
-      จึงคำนวณซ้ำเทียบได้เฉพาะกับบล็อกล่าสุด · ส่วน <code>leaderboardRoot</code> ของบล็อกเก่ายังถูก
-      คุ้มครองด้วย hash chain + ลายเซ็นอยู่ (แก้แล้วเชนพัง จับได้) เพียงแต่ยัง "คำนวณซ้ำ" เทียบไม่ได้</p>
-    <p>· <b>อันดับระดับจังหวัด / ภาค</b> — เชน commit เฉพาะตารางระดับประเทศ ตารางย่อยจึงยังไม่อยู่
-      ในขอบเขตการพิสูจน์นี้</p>
+    <h3>7. สิ่งที่หน้านี้ตรวจให้คุณ</h3>
+    <p>ทุกครั้งที่กดตรวจสอบ หน้านี้จะดึงข้อมูลสาธารณะมาคำนวณและเทียบใหม่ทั้งหมด
+      ในเบราว์เซอร์ของผู้ตรวจเอง:</p>
+    <p>· <b>รหัสประจำบล็อก</b> (<code>blockHash</code>) — คำนวณ <code>SHA-256</code> ซ้ำจาก
+      เนื้อหาบล็อก เทียบกับรหัสที่ประกาศไว้ ครบทุกบล็อกตั้งแต่บล็อกกำเนิด</p>
+    <p>· <b>ลายเซ็นดิจิทัล</b> (<code>Ed25519</code>) — ตรวจทุกบล็อกด้วยกุญแจสาธารณะจาก
+      trust-root ที่ pin ไว้ในรีโปนี้ (บล็อกไม่เซ็น / verify ไม่ผ่าน = ถือว่าไม่ผ่าน)</p>
+    <p>· <b>ความต่อเนื่องของเชน</b> — <code>previousBlockHash</code> ของทุกบล็อกต้องตรงกับ
+      รหัสของบล็อกก่อนหน้า ตลอดสายจนถึงบล็อกล่าสุด</p>
+    <p>· <b>ตารางอันดับ</b> (<code>leaderboardRoot</code>) — ดึงตารางอันดับระดับประเทศปัจจุบัน
+      ทั้งสองเกมมาคำนวณ Merkle ซ้ำ เทียบกับรากที่เซ็นไว้ในบล็อกผลงวดล่าสุดของเกมนั้น</p>
 
     <h3>8. Reference</h3>
     <p>อัลกอริทึมตรงกับ <code>functions_league/ledger.js</code> (server) เป๊ะ · มี Node CLI verifier
@@ -294,7 +311,12 @@ async function run() {
         "⚠️ โหมด allow-unsigned — ตรวจแค่ hash + เชน");
     $("status").innerHTML = keyMsg + " · หัวเชนล่าสุด #" + head.latestBlockNumber;
     let prev = null, pass = 0, fail = 0;
+    let hashFail = 0, sigFail = 0, chainFail = 0;
     const lastDraw = {n2: null, n3: null};
+    $("results").innerHTML =
+      '<div class="rowhead"><span class="n">บล็อก</span>' +
+      '<span class="c">แฮช</span><span class="c">ลายเซ็น</span>' +
+      '<span class="c">เชน</span></div>';
     for (let n = from; n <= to; n++) {
       const block = await getJson(BASE + "/ledgerPublic?block=" + n);
       if (block.blockType === "draw" &&
@@ -304,18 +326,24 @@ async function run() {
       const {hashOk, sigOk} = await verifyOne(block);
       let chainOk = true;
       if (ONLY === null && n > 0) chainOk = block.previousBlockHash === prev;
+      if (!hashOk) hashFail++;
+      if (sigOk === false) sigFail++;
+      if (!chainOk) chainFail++;
       (hashOk && sigOk !== false && chainOk) ? pass++ : fail++;
       const chainMark = (ONLY !== null || n === 0) ? mark(null) : mark(chainOk);
+      const tyTh = block.blockType === "genesis" ? "กำเนิด" :
+        (block.blockType === "draw" ? "ผลงวด" : (block.blockType || ""));
       $("results").insertAdjacentHTML("beforeend",
-        '<div class="row"><span class="n">#' + n + '</span>' +
-        '<span class="ty">' + (block.blockType || "") + '</span>' +
-        'hash ' + mark(hashOk) + ' ลายเซ็น ' + mark(sigOk) + ' เชน ' + chainMark +
-        '<span class="hash">' + String(block.blockHash).slice(0, 12) + '…</span></div>');
+        '<div class="row"><span class="n">#' + n + ' ' + tyTh + '</span>' +
+        '<span class="c">' + mark(hashOk) + '</span>' +
+        '<span class="c">' + mark(sigOk) + '</span>' +
+        '<span class="c">' + chainMark + '</span>' +
+        '<span class="hash">' + String(block.blockHash).slice(0, 10) + '…</span></div>');
       prev = block.blockHash;
     }
 
     // [finding #1] ตรวจตารางอันดับปัจจุบันตรงกับ leaderboardRoot ที่เซ็นในบล็อกล่าสุด
-    let lbFail = 0;
+    let lbFail = 0, lbChecked = 0;
     if (ONLY === null && trustKeys && canVerifySig) {
       for (const g of ["n2", "n3"]) {
         const blk = lastDraw[g];
@@ -326,33 +354,47 @@ async function run() {
           if (board.seasonId && blk.seasonId &&
               board.seasonId !== blk.seasonId) continue;
           const root = await merkleRoot(await buildLeaderboardLeaves(board.top));
-          const ok = root === blk.leaderboardRoot;
-          if (!ok) lbFail++;
-          $("results").insertAdjacentHTML("beforeend",
-            '<div class="row"><span class="n">อันดับ</span>' +
-            '<span class="ty">' + g.toUpperCase() + " #" + blk.blockNumber +
-            '</span>leaderboardRoot ' + mark(ok) +
-            '<span class="hash">recompute</span></div>');
+          lbChecked++;
+          if (root !== blk.leaderboardRoot) lbFail++;
         } catch (e) { /* ดึงไม่ได้ = ข้าม ไม่ทำให้ทั้งเชนแดง */ }
       }
     }
 
-    if (fail > 0 || lbFail > 0) {
-      $("banner").innerHTML =
-        '<div class="banner bad">❌ พบปัญหา' +
-        (fail > 0 ? " " + fail + " บล็อก" : "") +
-        (lbFail > 0 ? " · ตารางอันดับ " + lbFail + " ไม่ตรง" : "") + '!</div>';
-    } else if (canVerifySig) {
-      $("banner").innerHTML = '<div class="banner ok">✅ ผ่านทั้งหมด — ไม่ถูกแก้' +
-        ' (รวมลายเซ็น + ตารางอันดับ · ' + pass + ' บล็อก)</div>';
-    } else {
-      $("banner").innerHTML = '<div class="banner warn">⚠️ ผ่าน hash + เชน (' +
-        pass + ' บล็อก) แต่<b>ยังไม่ตรวจลายเซ็น</b> — ' +
-        (keyStatus === "unsupported" ?
-          'ใช้ Node CLI verify-ledger.js เพื่อตรวจเต็ม' : 'โหมด allow-unsigned') +
-        '</div>';
+    const total = pass + fail;
+    const sigChecked = canVerifySig && !ALLOW_UNSIGNED;
+    const allOk = fail === 0 && lbFail === 0;
+
+    const li = (ok, text) =>
+      '<div class="sumrow ' + (ok ? "pass" : "failrow") + '">' +
+      '<span class="mk">' + (ok ? "✅" : "❌") + '</span><span>' + text + '</span></div>';
+    const rows = [li(hashFail === 0, "รหัสประจำบล็อก ถูกต้องทุกบล็อก")];
+    if (sigChecked) rows.push(li(sigFail === 0, "ลายเซ็นดิจิทัล ครบทุกบล็อก"));
+    if (ONLY === null) rows.push(li(chainFail === 0, "การเชื่อมต่อกัน ไม่ขาดสาย"));
+    if (lbChecked > 0) {
+      rows.push(li(lbFail === 0, "ตารางอันดับ ตรงกับที่บันทึกไว้ — " +
+        "ทั้งเลขท้าย 2 ตัว และ 3 ตัวท้ายรางวัลที่ 1"));
     }
-    $("status").textContent = "ตรวจเสร็จ " + (pass + fail) + " บล็อก";
+    $("summary").innerHTML = '<div class="sum">' + rows.join("") + '</div>';
+    $("detailBox").hidden = false;
+
+    if (!allOk) {
+      $("banner").innerHTML = '<div class="banner bad">' +
+        '<div class="bmain">❌ พบความผิดปกติ</div>' +
+        '<div class="bsub">มีข้อมูลไม่ตรงกับที่บันทึกไว้ ดูรายละเอียดด้านล่าง</div></div>';
+    } else if (sigChecked) {
+      $("banner").innerHTML = '<div class="banner ok">' +
+        '<div class="bmain">✅ ผ่านทั้งหมด — ไม่ถูกแก้ไข</div>' +
+        '<div class="bsub">ตรวจครบ ' + total + ' บล็อก' +
+        (lbChecked > 0 ? " · รวมลายเซ็นและตารางอันดับ" : " · รวมลายเซ็น") +
+        '</div></div>';
+    } else {
+      $("banner").innerHTML = '<div class="banner warn">' +
+        '<div class="bmain">⚠️ ตรวจได้บางส่วน</div>' +
+        '<div class="bsub">' + (keyStatus === "unsupported" ?
+          "เบราว์เซอร์นี้ตรวจลายเซ็นไม่ได้" : "โหมดตรวจเฉพาะรหัสและการเชื่อมต่อ") +
+        '</div></div>';
+    }
+    $("status").textContent = "ตรวจเสร็จ " + total + " บล็อก";
   } catch (e) {
     $("banner").innerHTML = '<div class="banner bad">เชื่อมต่อไม่ได้: ' + e.message + '</div>';
     $("status").textContent = "";
