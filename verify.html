@@ -144,6 +144,32 @@ async function getJson(url) {
   const r = await fetch(url); if (!r.ok) throw new Error("HTTP " + r.status); return r.json();
 }
 
+// [finding #1] recompute leaderboardRoot — Merkle เดียวกับ ledger.js (async ผ่าน Web Crypto)
+const ZERO_HASH = "0".repeat(64);
+async function merkleRoot(leaves) {
+  if (!Array.isArray(leaves) || leaves.length === 0) return ZERO_HASH;
+  let level = leaves.slice();
+  while (level.length > 1) {
+    const next = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const right = i + 1 < level.length ? level[i + 1] : level[i];
+      next.push(await sha256hex(level[i] + right));
+    }
+    level = next;
+  }
+  return level[0];
+}
+async function leaderboardLeaf(e) {
+  return sha256hex(canonicalize({
+    accuracyRate: e.accuracyRate || 0, bestStreak: e.bestStreak || 0,
+    currentStreak: e.currentStreak || 0, displayName: e.displayName || "",
+    rank: e.rank || 0, totalWins: e.totalWins || 0,
+  }));
+}
+async function buildLeaderboardLeaves(top) {
+  return Promise.all((top || []).map(leaderboardLeaf));
+}
+
 // [งาน A] trust-root = keys.json (git-pinned ใน repo นี้) — ไม่เชื่อ key จาก endpoint
 // keyStatus: "ok" · "missing"=โหลด keys.json ไม่ได้ · "unsupported"=browser ไม่รองรับ Ed25519
 let trustKeys = null, keyLoaded = false, keyStatus = "ok", canVerifySig = false;
@@ -234,8 +260,13 @@ async function run() {
         "⚠️ โหมด allow-unsigned — ตรวจแค่ hash + เชน");
     $("status").innerHTML = keyMsg + " · หัวเชนล่าสุด #" + head.latestBlockNumber;
     let prev = null, pass = 0, fail = 0;
+    const lastDraw = {n2: null, n3: null};
     for (let n = from; n <= to; n++) {
       const block = await getJson(BASE + "/ledgerPublic?block=" + n);
+      if (block.blockType === "draw" &&
+          (block.gameType === "n2" || block.gameType === "n3")) {
+        lastDraw[block.gameType] = block;
+      }
       const {hashOk, sigOk} = await verifyOne(block);
       let chainOk = true;
       if (ONLY === null && n > 0) chainOk = block.previousBlockHash === prev;
@@ -248,12 +279,38 @@ async function run() {
         '<span class="hash">' + String(block.blockHash).slice(0, 12) + '…</span></div>');
       prev = block.blockHash;
     }
-    if (fail > 0) {
+
+    // [finding #1] ตรวจตารางอันดับปัจจุบันตรงกับ leaderboardRoot ที่เซ็นในบล็อกล่าสุด
+    let lbFail = 0;
+    if (ONLY === null && trustKeys && canVerifySig) {
+      for (const g of ["n2", "n3"]) {
+        const blk = lastDraw[g];
+        if (!blk) continue;
+        try {
+          const board = await getJson(BASE + "/ledgerPublic?board=" + g);
+          if (!Array.isArray(board.top)) continue; // endpoint ยังไม่รองรับ board
+          if (board.seasonId && blk.seasonId &&
+              board.seasonId !== blk.seasonId) continue;
+          const root = await merkleRoot(await buildLeaderboardLeaves(board.top));
+          const ok = root === blk.leaderboardRoot;
+          if (!ok) lbFail++;
+          $("results").insertAdjacentHTML("beforeend",
+            '<div class="row"><span class="n">อันดับ</span>' +
+            '<span class="ty">' + g.toUpperCase() + " #" + blk.blockNumber +
+            '</span>leaderboardRoot ' + mark(ok) +
+            '<span class="hash">recompute</span></div>');
+        } catch (e) { /* ดึงไม่ได้ = ข้าม ไม่ทำให้ทั้งเชนแดง */ }
+      }
+    }
+
+    if (fail > 0 || lbFail > 0) {
       $("banner").innerHTML =
-        '<div class="banner bad">❌ พบปัญหา ' + fail + ' บล็อก!</div>';
+        '<div class="banner bad">❌ พบปัญหา' +
+        (fail > 0 ? " " + fail + " บล็อก" : "") +
+        (lbFail > 0 ? " · ตารางอันดับ " + lbFail + " ไม่ตรง" : "") + '!</div>';
     } else if (canVerifySig) {
       $("banner").innerHTML = '<div class="banner ok">✅ ผ่านทั้งหมด — ไม่ถูกแก้' +
-        ' (รวมลายเซ็น · ' + pass + ' บล็อก)</div>';
+        ' (รวมลายเซ็น + ตารางอันดับ · ' + pass + ' บล็อก)</div>';
     } else {
       $("banner").innerHTML = '<div class="banner warn">⚠️ ผ่าน hash + เชน (' +
         pass + ' บล็อก) แต่<b>ยังไม่ตรวจลายเซ็น</b> — ' +
@@ -270,6 +327,7 @@ async function run() {
 
 $("go").onclick = run;
 if (ONLY !== null) { $("go").textContent = "🛡️ ตรวจสอบบล็อก #" + ONLY; run(); }
+else if (params.has("full")) { run(); } // เปิดจากปุ่ม "ตรวจสอบเต็ม" ในแอป → ตรวจทั้งเชนอัตโนมัติ
 </script>
 </body>
 </html>

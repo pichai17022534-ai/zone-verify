@@ -95,6 +95,46 @@ function verifyOne(block, pubPem) {
 }
 
 // ---------------------------------------------------------------------------
+// [finding #1] recompute leaderboardRoot — ดึงตารางอันดับปัจจุบันมาทำ Merkle ซ้ำ
+//   เทียบ root ที่เซ็นในบล็อก draw ล่าสุดต่อเกม → จับการแก้ leaderboard ตรง DB
+//   อัลกอริทึม merkleRoot/leaderboardLeaf ตรงกับ functions_league/ledger.js เป๊ะ
+// ---------------------------------------------------------------------------
+
+const ZERO_HASH = "0".repeat(64);
+
+/** Merkle root แบบ binary (คี่=ทำซ้ำใบท้าย · ว่าง=ZERO_HASH · ใบเดียว=ตัวเอง) */
+function merkleRoot(leaves) {
+  if (!Array.isArray(leaves) || leaves.length === 0) return ZERO_HASH;
+  let level = leaves.slice();
+  while (level.length > 1) {
+    const next = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const right = i + 1 < level.length ? level[i + 1] : level[i];
+      next.push(sha256hex(level[i] + right));
+    }
+    level = next;
+  }
+  return level[0];
+}
+
+/** ใบ Merkle ของแถวอันดับ 1 แถว (6 ฟิลด์ canonical — ตรงกับ ledger.js) */
+function leaderboardLeaf(e) {
+  return sha256hex(canonicalize({
+    accuracyRate: e.accuracyRate || 0,
+    bestStreak: e.bestStreak || 0,
+    currentStreak: e.currentStreak || 0,
+    displayName: e.displayName || "",
+    rank: e.rank || 0,
+    totalWins: e.totalWins || 0,
+  }));
+}
+
+/** ใบตารางอันดับจาก top (เรียงตาม rank อยู่แล้ว) */
+function buildLeaderboardLeaves(top) {
+  return (top || []).map(leaderboardLeaf);
+}
+
+// ---------------------------------------------------------------------------
 
 /**
  * โหลด keys.json (trust-root) — pinned ในโฟลเดอร์เดียวกับ verifier
@@ -186,9 +226,14 @@ async function main() {
   let prevHash = null;
   let pass = 0;
   let fail = 0;
+  const lastDraw = {n2: null, n3: null}; // บล็อกผลล่าสุดต่อเกม (ตรวจ leaderboard)
 
   for (let n = from; n <= to; n++) {
     const block = await getJson(`${BASE}/ledgerPublic?block=${n}`);
+    if (block.blockType === "draw" &&
+        (block.gameType === "n2" || block.gameType === "n3")) {
+      lastDraw[block.gameType] = block;
+    }
     const {pubPem, forceFail} = resolveKeyForBlock(trustKeys, block.blockNumber);
     const {hashOk, sigOk} = verifyOne(block, pubPem);
     const effSig = forceFail ? false : sigOk;
@@ -207,17 +252,53 @@ async function main() {
     prevHash = block.blockHash;
   }
 
+  // [finding #1] ตรวจตารางอันดับปัจจุบันตรงกับ leaderboardRoot ที่เซ็นในบล็อกล่าสุด
+  //   (เฉพาะตรวจทั้งเชน + มี trust key · ต่อยอดจับการแก้ board ตรง Firestore)
+  let lbFail = 0;
+  if (single === null && trustKeys) {
+    for (const g of ["n2", "n3"]) {
+      const blk = lastDraw[g];
+      if (!blk) continue; // ยังไม่มีบล็อกผลของเกมนี้ = ไม่มีอะไรเทียบ
+      try {
+        const board = await getJson(`${BASE}/ledgerPublic?board=${g}`);
+        // กัน version-skew: endpoint เก่า (ยังไม่มีโหมด board) fallback คืน block
+        //   object ที่ไม่มี .top → อย่า recompute (ไม่งั้น false RED) · ข้ามแทน
+        if (!Array.isArray(board.top)) {
+          console.log(`ตารางอันดับ ${g.toUpperCase()}: ข้าม ` +
+            "(endpoint ยังไม่รองรับโหมด board — ยังไม่ deploy)");
+          continue;
+        }
+        if (board.seasonId && blk.seasonId && board.seasonId !== blk.seasonId) {
+          console.log(`ตารางอันดับ ${g.toUpperCase()}: ข้าม ` +
+            "(ซีซั่นปัจจุบันคนละกับบล็อกล่าสุด)");
+          continue;
+        }
+        const root = merkleRoot(buildLeaderboardLeaves(board.top));
+        const ok = root === blk.leaderboardRoot;
+        if (!ok) lbFail++;
+        console.log(
+            `ตารางอันดับ ${g.toUpperCase()} (บล็อก #${blk.blockNumber}) ` +
+            `recompute ${ok ? "✅ ตรง" : "❌ ไม่ตรง"} leaderboardRoot`);
+      } catch (e) {
+        console.log(`⚠️  ดึง/ตรวจตารางอันดับ ${g} ไม่ได้: ${e.message}`);
+      }
+    }
+  }
+
+  const totalFail = fail + lbFail;
   const mode = trustKeys ? "เชนสมบูรณ์ ไม่ถูกแก้" :
     "hash + เชน เท่านั้น (ยังไม่ตรวจลายเซ็น)";
   console.log(
-      `\n${fail === 0 ? `✅ ผ่านทั้งหมด — ${mode}` : "❌ พบปัญหา!"} ` +
-      `(ตรวจ ${pass + fail} บล็อก · ผ่าน ${pass} · ไม่ผ่าน ${fail})`);
-  process.exit(fail === 0 ? 0 : 1);
+      `\n${totalFail === 0 ? `✅ ผ่านทั้งหมด — ${mode}` : "❌ พบปัญหา!"} ` +
+      `(ตรวจ ${pass + fail} บล็อก · ผ่าน ${pass} · ไม่ผ่าน ${fail}` +
+      `${lbFail ? ` · ตารางอันดับ ${lbFail} ไม่ตรง` : ""})`);
+  process.exit(totalFail === 0 ? 0 : 1);
 }
 
 module.exports = {
   verifyOne, canonicalize, canonicalBase, sha256hex,
   loadTrustKeys, keyForBlock, resolveKeyForBlock,
+  merkleRoot, leaderboardLeaf, buildLeaderboardLeaves,
 };
 
 if (require.main === module) {
